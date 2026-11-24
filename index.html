@@ -16,6 +16,7 @@
       --accent-hover: #2563eb;
       --accent-soft: rgba(59, 130, 246, 0.16);
       --success: #22c55e;
+      --warn: #f59e0b;
     }
 
     * {
@@ -107,6 +108,16 @@
     .live-pill.playing {
       color: #dcfce7;
       border-color: rgba(34, 197, 94, 0.35);
+    }
+
+    .live-pill.loading .dot {
+      background: var(--warn);
+      box-shadow: 0 0 10px var(--warn);
+    }
+
+    .live-pill.loading {
+      color: #fef3c7;
+      border-color: rgba(245, 158, 11, 0.35);
     }
 
     .layout {
@@ -459,27 +470,29 @@
           </div>
           <select id="modeSelect" title="โหมดสตรีม">
             <option value="auto">อัตโนมัติ</option>
+            <option value="hls">HLS (.m3u8) ลื่นไหล</option>
+            <option value="native_hls">HLS Native (&lt;video&gt; ตรง)</option>
             <option value="ts">MPEG-TS (.ts)</option>
-            <option value="hls">HLS (.m3u8)</option>
             <option value="xtream_hls">Xtream -> /live/...m3u8</option>
           </select>
           <button id="playIptvBtn" type="button">เล่นสตรีม</button>
           <button id="reloadIptvBtn" class="ghost" type="button" title="ล้างบัฟเฟอร์และโหลดใหม่">รีโหลด</button>
+          <button id="openExternalBtn" class="ghost" type="button" title="เปิดลิงก์ใน Chrome">เปิดใน Chrome</button>
         </div>
 
         <div class="stage" id="stage">
-          <video id="video" controls playsinline preload="auto"></video>
+          <video id="video" controls playsinline preload="metadata"></video>
         </div>
 
         <div class="action-row">
           <div class="toggles">
             <label>
-              <input id="preBufferDelay" type="checkbox" checked />
-              หน่วงเริ่มเล่น ~2.5 วิเพื่อตุนบัฟเฟอร์ (6 MB)
+              <input id="capQualityCheckbox" type="checkbox" checked />
+              จำกัดคุณภาพให้เหมาะกับจอ (ลดการหมุนโหลด)
             </label>
             <label>
-              <input id="autoRecover" type="checkbox" checked />
-              กู้คืน/รีโหลดอัตโนมัติเมื่อค้างเกิน 6 วิ
+              <input id="spinAlert" type="checkbox" checked />
+              แจ้งเตือนเมื่อหมุนโหลดเกิน 7 วิ
             </label>
           </div>
 
@@ -489,7 +502,7 @@
           </div>
         </div>
 
-        <div id="status" class="status-box">พร้อมใช้งาน — ลากไฟล์ Playlist (.m3u / .m3u8) มาวางที่กล่องด้านขวาเพื่อเลือกช่องครับ</div>
+        <div id="status" class="status-box">พร้อมใช้งาน — โหลดไฟล์ Playlist (.m3u / .m3u8) ด้านขวาเพื่อเลือกช่องใช้งานได้เลยครับ</div>
       </main>
 
       <div class="side-stack">
@@ -542,10 +555,11 @@
     const modeSelect = document.getElementById('modeSelect');
     const playIptvBtn = document.getElementById('playIptvBtn');
     const reloadIptvBtn = document.getElementById('reloadIptvBtn');
+    const openExternalBtn = document.getElementById('openExternalBtn');
     const pipBtn = document.getElementById('pipBtn');
     const fsBtn = document.getElementById('fsBtn');
-    const preBufferDelayCheckbox = document.getElementById('preBufferDelay');
-    const autoRecoverCheckbox = document.getElementById('autoRecover');
+    const capQualityCheckbox = document.getElementById('capQualityCheckbox');
+    const spinAlertCheckbox = document.getElementById('spinAlert');
     const statusEl = document.getElementById('status');
     const liveBadge = document.getElementById('liveBadge');
     const liveText = document.getElementById('liveText');
@@ -565,11 +579,24 @@
     let hls = null;
     let mpegtsPlayer = null;
     let currentIptvUrl = '';
-    let stallTimer = null;
-    let startDelayTimer = null;
-    let hlsRecoveryAttempts = 0;
+    let currentChannelLabel = '';
+    let spinTimer = null;
+    let playSessionId = 0;
     let playlistItems = [];
     let watchHistory = loadHistory();
+
+    function normalizeUrl(raw) {
+      let url = String(raw || '').trim();
+      if (!url) return '';
+      if (!/^https?:\/\//i.test(url)) {
+        url = 'http://' + url;
+      }
+      return url;
+    }
+
+    function isM3u8Url(url) {
+      return /\.m3u8(\?|$)/i.test(url);
+    }
 
     function loadHistory() {
       try {
@@ -655,8 +682,10 @@
       setStatus('ล้างประวัติการเล่นแล้ว');
     });
 
-    function setLiveState(playing, label) {
-      liveBadge.classList.toggle('playing', playing);
+    function setLiveState(state, label) {
+      liveBadge.classList.remove('playing', 'loading');
+      if (state === 'playing') liveBadge.classList.add('playing');
+      if (state === 'loading') liveBadge.classList.add('loading');
       liveText.textContent = label;
     }
 
@@ -666,62 +695,51 @@
     }
 
     function clearTimers() {
-      if (stallTimer) {
-        clearTimeout(stallTimer);
-        stallTimer = null;
-      }
-      if (startDelayTimer) {
-        clearTimeout(startDelayTimer);
-        startDelayTimer = null;
+      if (spinTimer) {
+        clearTimeout(spinTimer);
+        spinTimer = null;
       }
     }
 
-    function armStallTimer() {
-      if (stallTimer) clearTimeout(stallTimer);
-      if (!autoRecoverCheckbox.checked || !currentIptvUrl) return;
+    function armSpinAlert(sessionId) {
+      if (spinTimer) clearTimeout(spinTimer);
+      if (!spinAlertCheckbox.checked || !currentIptvUrl) return;
 
-      stallTimer = setTimeout(() => {
-        if (!video.paused && currentIptvUrl) {
-          if (hls) {
-            setStatus('บัฟเฟอร์หมดชั่วคราว กำลังดึงข้อมูลเพิ่ม...');
-            hls.startLoad();
-            video.play().catch(() => {});
-          } else {
-            setStatus('สตรีมค้างเกิน 6 วินาที กำลังรีโหลดใหม่อัตโนมัติ...');
-            startIptvPlay(currentIptvUrl);
-          }
-        }
-      }, 6000);
+      spinTimer = setTimeout(() => {
+        if (sessionId !== playSessionId || !currentIptvUrl) return;
+        const chText = currentChannelLabel ? `[${currentChannelLabel}] ` : '';
+        setLiveState('loading', 'หมุนโหลดนาน...');
+        setStatus(`${chText}ลิงก์ M3U8 หมุนโหลดเกิน 7 วินาที — ลองเปลี่ยนโหมดเป็น "HLS Native" กด "เปิดใน Chrome" หรือเปลี่ยนช่องอื่นครับ`);
+      }, 7000);
     }
 
     video.addEventListener('waiting', () => {
-      setLiveState(false, 'กำลังบัฟเฟอร์...');
-      armStallTimer();
+      setLiveState('loading', 'กำลังโหลด...');
+      armSpinAlert(playSessionId);
     });
 
     video.addEventListener('stalled', () => {
-      armStallTimer();
+      setLiveState('loading', 'กำลังโหลด...');
+      armSpinAlert(playSessionId);
     });
 
     video.addEventListener('playing', () => {
-      if (stallTimer) {
-        clearTimeout(stallTimer);
-        stallTimer = null;
+      if (spinTimer) {
+        clearTimeout(spinTimer);
+        spinTimer = null;
       }
-      hlsRecoveryAttempts = 0;
-      setLiveState(true, 'กำลังเล่นสตรีม');
+      setLiveState('playing', 'กำลังเล่นสตรีม');
     });
 
     video.addEventListener('pause', () => {
-      if (!video.ended) {
-        setLiveState(false, 'หยุดชั่วคราว');
+      if (!video.ended && currentIptvUrl) {
+        setLiveState('idle', 'หยุดชั่วคราว');
       }
     });
 
     function destroyAllMedia() {
       clearTimers();
-      hlsRecoveryAttempts = 0;
-      setLiveState(false, 'พร้อมใช้งาน');
+      setLiveState('idle', 'พร้อมใช้งาน');
 
       try {
         if (hls) {
@@ -766,27 +784,50 @@
       }
     }
 
-    function triggerPlayWithOptionalDelay(playFn, label) {
-      const delayMs = preBufferDelayCheckbox.checked ? 2500 : 0;
-      if (delayMs > 0) {
-        setLiveState(false, 'ตุนบัฟเฟอร์ ~2.5 วิ...');
-        setStatus(`กำลังตุนบัฟเฟอร์ ~2.5 วินาทีเพื่อลดอาการสะดุด (${label})...`);
-        startDelayTimer = setTimeout(playFn, delayMs);
-      } else {
-        playFn();
+    function playNativeHls(url, sessionId, onFail) {
+      setLiveState('loading', 'กำลังโหลด...');
+      armSpinAlert(sessionId);
+      setStatus(`กำลังโหลด HLS Native: ${url}`);
+      video.src = url;
+      video.load();
+
+      const onErr = () => {
+        video.removeEventListener('error', onErr);
+        if (sessionId !== playSessionId) return;
+        const code = video.error ? video.error.code : 0;
+        const msg = `HLS Native เล่นไม่สำเร็จ (MediaError ${code})`;
+        if (onFail) onFail(msg);
+        else setStatus(msg);
+      };
+
+      video.addEventListener('error', onErr, { once: true });
+
+      const p = video.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          video.removeEventListener('error', onErr);
+          if (sessionId === playSessionId) setStatus(`กำลังเล่น HLS Native: ${url}`);
+        }).catch((err) => {
+          if (sessionId === playSessionId) {
+            if (onFail) onFail(err.message || 'เล่น HLS Native ไม่สำเร็จ');
+            else setStatus(`กดปุ่ม Play บนจอวิดีโอเพื่อเริ่มเล่น: ${err.message || err}`);
+          }
+        });
       }
     }
 
-    function playMpegTs(url, onFail) {
+    function playMpegTs(url, sessionId, onFail) {
       if (!window.mpegts || !mpegts.getFeatureList().mseLivePlayback) {
-        const msg = 'เบราว์เซอร์ไม่รองรับ mpegts.js (MSE Live Playback)';
+        const msg = 'เบราว์เซอร์ไม่รองรับ mpegts.js';
         if (onFail) onFail(msg);
         else setStatus(msg);
         return;
       }
 
       try {
-        setStatus(`กำลังโหลด MPEG-TS (บัฟเฟอร์ 6 MB): ${url}`);
+        setLiveState('loading', 'กำลังโหลด...');
+        armSpinAlert(sessionId);
+        setStatus(`กำลังโหลด MPEG-TS: ${url}`);
         mpegtsPlayer = mpegts.createPlayer(
           {
             type: 'mpegts',
@@ -794,97 +835,88 @@
             url: url
           },
           {
-            enableWorker: true,
+            enableWorker: false,
             enableStashBuffer: true,
-            stashInitialSize: 6144,
+            stashInitialSize: 3072,
             liveBufferLatencyChasing: false,
-            autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 60,
-            autoCleanupMinBackwardDuration: 30
+            autoCleanupSourceBuffer: false
           }
         );
 
         mpegtsPlayer.attachMediaElement(video);
         mpegtsPlayer.load();
 
-        triggerPlayWithOptionalDelay(() => {
-          const playPromise = mpegtsPlayer.play();
-          if (playPromise && typeof playPromise.then === 'function') {
-            playPromise
-              .then(() => setStatus(`กำลังเล่น MPEG-TS: ${url}`))
-              .catch((err) => setStatus(`รอเริ่มเล่นหรือกดปุ่ม Play บนวิดีโอ: ${err.message || err}`));
-          }
-        }, 'MPEG-TS');
+        const playPromise = mpegtsPlayer.play();
+        if (playPromise && typeof playPromise.then === 'function') {
+          playPromise
+            .then(() => {
+              if (sessionId === playSessionId) setStatus(`กำลังเล่น MPEG-TS: ${url}`);
+            })
+            .catch((err) => {
+              if (sessionId === playSessionId) setStatus(`กดปุ่ม Play บนจอวิดีโอเพื่อเริ่มเล่น: ${err.message || err}`);
+            });
+        }
 
         mpegtsPlayer.on(mpegts.Events.ERROR, (errType, errDetail) => {
+          if (sessionId !== playSessionId) return;
           const detail = `MPEG-TS Error (${errType} / ${errDetail})`;
           if (onFail) onFail(detail);
           else setStatus(detail);
         });
       } catch (err) {
+        if (sessionId !== playSessionId) return;
         const msg = `สร้าง MPEG-TS Player ล้มเหลว: ${err.message || err}`;
         if (onFail) onFail(msg);
         else setStatus(msg);
       }
     }
 
-    function playHls(url, onFail) {
+    function playHls(url, sessionId, onFail) {
+      setLiveState('loading', 'กำลังโหลด...');
+      armSpinAlert(sessionId);
       setStatus(`กำลังโหลด HLS: ${url}`);
+
       if (Hls.isSupported()) {
+        const capByScreen = capQualityCheckbox.checked;
         hls = new Hls({
-          enableWorker: true,
+          enableWorker: false,
           lowLatencyMode: false,
-          backBufferLength: 30,
-          maxBufferLength: 60,
-          maxMaxBufferLength: 90,
-          maxBufferHole: 0.5,
-          liveSyncDurationCount: 5,
-          liveMaxLatencyDurationCount: 12,
-          fragLoadingMaxRetry: 5,
-          manifestLoadingMaxRetry: 4,
-          levelLoadingMaxRetry: 4
+          capLevelToPlayerSize: capByScreen,
+          startLevel: capByScreen ? 0 : -1,
+          backBufferLength: 20,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 50,
+          maxBufferHole: 0.8,
+          liveSyncDurationCount: 3,
+          liveMaxLatencyDurationCount: 8,
+          fragLoadingTimeOut: 9000,
+          fragLoadingMaxRetry: 1,
+          manifestLoadingTimeOut: 8000,
+          manifestLoadingMaxRetry: 1,
+          levelLoadingTimeOut: 8000,
+          levelLoadingMaxRetry: 1
         });
         hls.loadSource(url);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          triggerPlayWithOptionalDelay(() => {
-            video.play()
-              .then(() => setStatus(`กำลังเล่น HLS: ${url}`))
-              .catch(() => {});
-          }, 'HLS');
+          video.play()
+            .then(() => {
+              if (sessionId === playSessionId) setStatus(`กำลังเล่น HLS: ${url}`);
+            })
+            .catch(() => {});
         });
 
         hls.on(Hls.Events.ERROR, (event, data) => {
+          if (sessionId !== playSessionId) return;
           if (data.fatal) {
-            if (autoRecoverCheckbox.checked && hlsRecoveryAttempts < 3) {
-              hlsRecoveryAttempts += 1;
-              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                setStatus(`สัญญาณสะดุด กำลังเชื่อมต่อใหม่ (${hlsRecoveryAttempts}/3)...`);
-                hls.startLoad();
-                return;
-              }
-              if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                setStatus(`กำลังกู้คืนตัวถอดรหัสวิดีโอ (${hlsRecoveryAttempts}/3)...`);
-                hls.recoverMediaError();
-                return;
-              }
-            }
             const detail = `HLS Error (${data.type} / ${data.details})`;
             if (onFail) onFail(detail);
             else setStatus(detail);
           }
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = url;
-        triggerPlayWithOptionalDelay(() => {
-          video.play()
-            .then(() => setStatus(`กำลังเล่น HLS: ${url}`))
-            .catch((err) => {
-              if (onFail) onFail(err.message || 'เล่น HLS ไม่สำเร็จ');
-              else setStatus('เล่น HLS ไม่สำเร็จ');
-            });
-        }, 'HLS');
+        playNativeHls(url, sessionId, onFail);
       } else {
         const msg = 'เบราว์เซอร์นี้ไม่รองรับ HLS';
         if (onFail) onFail(msg);
@@ -893,50 +925,74 @@
     }
 
     function startIptvPlay(overrideUrl, channelLabel) {
-      let url = (overrideUrl ?? iptvInput.value).trim();
+      const url = normalizeUrl(overrideUrl ?? iptvInput.value);
       if (!url) {
         setStatus('กรุณาเลือกช่องหรือใส่ลิงก์สตรีมก่อนครับ');
         return;
       }
-      if (!/^https?:\/\//i.test(url)) {
-        url = 'http://' + url;
-      }
+
+      playSessionId += 1;
+      const sessionId = playSessionId;
+      const labelToUse = channelLabel !== undefined ? channelLabel : currentChannelLabel;
 
       destroyAllMedia();
       iptvInput.value = url;
       currentIptvUrl = url;
-      recordHistory(url, channelLabel);
+      currentChannelLabel = labelToUse;
+      recordHistory(url, labelToUse);
       renderPlaylist();
 
-      const prefix = channelLabel ? `[${channelLabel}] ` : '';
+      const prefix = labelToUse ? `[${labelToUse}] ` : '';
       const mode = modeSelect.value;
 
-      if (mode === 'ts') {
-        playMpegTs(url);
-      } else if (mode === 'hls') {
-        playHls(url);
+      if (mode === 'hls') {
+        playHls(url, sessionId);
+      } else if (mode === 'native_hls') {
+        playNativeHls(url, sessionId);
+      } else if (mode === 'ts') {
+        playMpegTs(url, sessionId);
       } else if (mode === 'xtream_hls') {
-        playHls(toXtreamHlsUrl(url));
+        playHls(toXtreamHlsUrl(url), sessionId);
       } else {
-        if (isXtreamDirect(url)) {
-          playMpegTs(url, (tsErr) => {
+        if (isM3u8Url(url)) {
+          playHls(url, sessionId, (hlsErr) => {
+            if (sessionId !== playSessionId) return;
             destroyAllMedia();
-            playHls(toXtreamHlsUrl(url), (hlsErr) => {
-              setStatus(`${prefix}เล่นไม่สำเร็จทั้งสองโหมด:\n- ${tsErr}\n- ${hlsErr}`);
+            setStatus(`${prefix}${hlsErr} — ลองสลับโหมดเป็น "HLS Native" หรือกด "เปิดใน Chrome" ดูครับ`);
+          });
+        } else if (isXtreamDirect(url)) {
+          playMpegTs(url, sessionId, (tsErr) => {
+            if (sessionId !== playSessionId) return;
+            destroyAllMedia();
+            playHls(toXtreamHlsUrl(url), sessionId, (hlsErr) => {
+              if (sessionId !== playSessionId) return;
+              setStatus(`${prefix}เล่นไม่สำเร็จ:\n- ${tsErr}\n- ${hlsErr}`);
             });
           });
         } else {
-          playHls(url, (hlsErr) => {
+          playHls(url, sessionId, (hlsErr) => {
+            if (sessionId !== playSessionId) return;
             destroyAllMedia();
-            playMpegTs(url, (tsErr) => {
-              setStatus(`${prefix}เล่นไม่สำเร็จทั้งสองโหมด:\n- ${hlsErr}\n- ${tsErr}`);
+            playMpegTs(url, sessionId, (tsErr) => {
+              if (sessionId !== playSessionId) return;
+              setStatus(`${prefix}เล่นไม่สำเร็จ:\n- ${hlsErr}\n- ${tsErr}`);
             });
           });
         }
       }
     }
 
-    // แยกข้อมูลไฟล์ M3U / M3U8 (#EXTINF:-1,ชื่อช่อง ตามด้วยลิงก์)
+    openExternalBtn.addEventListener('click', () => {
+      const url = normalizeUrl(iptvInput.value || currentIptvUrl);
+      if (!url) {
+        setStatus('กรุณาเลือกช่องหรือใส่ลิงก์สตรีมก่อนกดเปิดใน Chrome ครับ');
+        return;
+      }
+      iptvInput.value = url;
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setStatus(`ส่งลิงก์ไปเปิดในเบราว์เซอร์ภายนอกแล้ว: ${url}`);
+    });
+
     function parseM3uContent(content) {
       const lines = content
         .replace(/\r\n/g, '\n')
@@ -1080,7 +1136,7 @@
 
     playIptvBtn.addEventListener('click', () => startIptvPlay());
     reloadIptvBtn.addEventListener('click', () => {
-      if (currentIptvUrl) startIptvPlay(currentIptvUrl);
+      if (currentIptvUrl) startIptvPlay(currentIptvUrl, currentChannelLabel);
     });
     iptvInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') startIptvPlay();
