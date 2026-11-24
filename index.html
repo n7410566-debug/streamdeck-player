@@ -231,6 +231,8 @@
       height: 100%;
       display: block;
       background: #000;
+      transform: translateZ(0);
+      will-change: transform;
     }
 
     .action-row {
@@ -466,18 +468,18 @@
         </div>
 
         <div class="stage" id="stage">
-          <video id="video" controls playsinline></video>
+          <video id="video" controls playsinline preload="auto"></video>
         </div>
 
         <div class="action-row">
           <div class="toggles">
             <label>
               <input id="preBufferDelay" type="checkbox" checked />
-              หน่วงเริ่มเล่น ~3 วิเพื่อสะสมบัฟเฟอร์ (4 MB)
+              หน่วงเริ่มเล่น ~2.5 วิเพื่อตุนบัฟเฟอร์ (6 MB)
             </label>
             <label>
               <input id="autoRecover" type="checkbox" checked />
-              รีโหลดอัตโนมัติเมื่อค้างเกิน 5 วิ
+              กู้คืน/รีโหลดอัตโนมัติเมื่อค้างเกิน 6 วิ
             </label>
           </div>
 
@@ -565,6 +567,7 @@
     let currentIptvUrl = '';
     let stallTimer = null;
     let startDelayTimer = null;
+    let hlsRecoveryAttempts = 0;
     let playlistItems = [];
     let watchHistory = loadHistory();
 
@@ -679,10 +682,16 @@
 
       stallTimer = setTimeout(() => {
         if (!video.paused && currentIptvUrl) {
-          setStatus('สตรีมค้างเกิน 5 วินาที กำลังรีโหลดใหม่อัตโนมัติ...');
-          startIptvPlay(currentIptvUrl);
+          if (hls) {
+            setStatus('บัฟเฟอร์หมดชั่วคราว กำลังดึงข้อมูลเพิ่ม...');
+            hls.startLoad();
+            video.play().catch(() => {});
+          } else {
+            setStatus('สตรีมค้างเกิน 6 วินาที กำลังรีโหลดใหม่อัตโนมัติ...');
+            startIptvPlay(currentIptvUrl);
+          }
         }
-      }, 5000);
+      }, 6000);
     }
 
     video.addEventListener('waiting', () => {
@@ -699,6 +708,7 @@
         clearTimeout(stallTimer);
         stallTimer = null;
       }
+      hlsRecoveryAttempts = 0;
       setLiveState(true, 'กำลังเล่นสตรีม');
     });
 
@@ -710,6 +720,7 @@
 
     function destroyAllMedia() {
       clearTimers();
+      hlsRecoveryAttempts = 0;
       setLiveState(false, 'พร้อมใช้งาน');
 
       try {
@@ -756,10 +767,10 @@
     }
 
     function triggerPlayWithOptionalDelay(playFn, label) {
-      const delayMs = preBufferDelayCheckbox.checked ? 3000 : 0;
+      const delayMs = preBufferDelayCheckbox.checked ? 2500 : 0;
       if (delayMs > 0) {
-        setLiveState(false, 'สะสมบัฟเฟอร์ ~3 วิ...');
-        setStatus(`กำลังสะสมบัฟเฟอร์ ~3 วินาทีก่อนเริ่มเล่น (${label})...`);
+        setLiveState(false, 'ตุนบัฟเฟอร์ ~2.5 วิ...');
+        setStatus(`กำลังตุนบัฟเฟอร์ ~2.5 วินาทีเพื่อลดอาการสะดุด (${label})...`);
         startDelayTimer = setTimeout(playFn, delayMs);
       } else {
         playFn();
@@ -775,7 +786,7 @@
       }
 
       try {
-        setStatus(`กำลังโหลด MPEG-TS (บัฟเฟอร์ 4 MB): ${url}`);
+        setStatus(`กำลังโหลด MPEG-TS (บัฟเฟอร์ 6 MB): ${url}`);
         mpegtsPlayer = mpegts.createPlayer(
           {
             type: 'mpegts',
@@ -785,10 +796,11 @@
           {
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 4096,
+            stashInitialSize: 6144,
             liveBufferLatencyChasing: false,
             autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 90
+            autoCleanupMaxBackwardDuration: 60,
+            autoCleanupMinBackwardDuration: 30
           }
         );
 
@@ -820,9 +832,17 @@
       setStatus(`กำลังโหลด HLS: ${url}`);
       if (Hls.isSupported()) {
         hls = new Hls({
-          maxBufferLength: 45,
+          enableWorker: true,
+          lowLatencyMode: false,
+          backBufferLength: 30,
+          maxBufferLength: 60,
           maxMaxBufferLength: 90,
-          liveSyncDurationCount: 6
+          maxBufferHole: 0.5,
+          liveSyncDurationCount: 5,
+          liveMaxLatencyDurationCount: 12,
+          fragLoadingMaxRetry: 5,
+          manifestLoadingMaxRetry: 4,
+          levelLoadingMaxRetry: 4
         });
         hls.loadSource(url);
         hls.attachMedia(video);
@@ -837,6 +857,19 @@
 
         hls.on(Hls.Events.ERROR, (event, data) => {
           if (data.fatal) {
+            if (autoRecoverCheckbox.checked && hlsRecoveryAttempts < 3) {
+              hlsRecoveryAttempts += 1;
+              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                setStatus(`สัญญาณสะดุด กำลังเชื่อมต่อใหม่ (${hlsRecoveryAttempts}/3)...`);
+                hls.startLoad();
+                return;
+              }
+              if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                setStatus(`กำลังกู้คืนตัวถอดรหัสวิดีโอ (${hlsRecoveryAttempts}/3)...`);
+                hls.recoverMediaError();
+                return;
+              }
+            }
             const detail = `HLS Error (${data.type} / ${data.details})`;
             if (onFail) onFail(detail);
             else setStatus(detail);
