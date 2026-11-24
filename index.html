@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StreamDeck Studio — IPTV & M3U8 Playlist Player</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: #111827;
+      --surface-2: #1a2334;
+      --border: rgba(148, 163, 184, 0.14);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --accent-soft: rgba(59, 130, 246, 0.16);
+      --success: #22c55e;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Inter", "Noto Sans Thai", system-ui, -apple-system, sans-serif;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(59, 130, 246, 0.14), transparent 45%),
+        radial-gradient(circle at 85% 10%, rgba(16, 185, 129, 0.08), transparent 40%),
+        var(--bg);
+      color: var(--text);
+      padding: 24px 16px;
+    }
+
+    .app {
+      max-width: 1240px;
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-badge {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #3b82f6, #06b6d4);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 15px;
+      color: #fff;
+      box-shadow: 0 10px 25px -8px rgba(59, 130, 246, 0.6);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .brand p {
+      margin: 2px 0 0;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 13px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #64748b;
+    }
+
+    .live-pill.playing .dot {
+      background: var(--success);
+      box-shadow: 0 0 10px var(--success);
+    }
+
+    .live-pill.playing {
+      color: #dcfce7;
+      border-color: rgba(34, 197, 94, 0.35);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 18px;
+      align-items: start;
+    }
+
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: rgba(17, 24, 39, 0.88);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 20px 45px -24px rgba(0, 0, 0, 0.75);
+    }
+
+    .side-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .url-bar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .input-wrap {
+      flex: 1;
+      min-width: 240px;
+    }
+
+    input[type="text"], input[type="search"] {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 11px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    input[type="text"]:focus, input[type="search"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    select {
+      padding: 11px 13px;
+      border-radius: 11px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    button {
+      padding: 11px 16px;
+      border-radius: 11px;
+      border: 1px solid transparent;
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+      background: var(--accent);
+      transition: transform 0.06s, background 0.15s, border-color 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    button:hover {
+      background: var(--accent-hover);
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    button.ghost {
+      background: var(--surface-2);
+      border-color: var(--border);
+      color: var(--text);
+    }
+
+    button.ghost:hover {
+      background: #243047;
+    }
+
+    button.mini {
+      padding: 5px 10px;
+      font-size: 12px;
+      border-radius: 8px;
+    }
+
+    .stage {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #03060c;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      position: relative;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #000;
+    }
+
+    .action-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .toggles {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .toggles label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .quick-tools {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .quick-tools button {
+      padding: 8px 12px;
+      font-size: 12.5px;
+      border-radius: 9px;
+    }
+
+    .status-box {
+      margin-top: 12px;
+      padding: 11px 13px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.78);
+      border: 1px solid var(--border);
+      font-size: 13px;
+      color: #cbd5e1;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .side-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .side-title h2 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .side-title-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .side-title span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .dropzone {
+      border: 1.5px dashed rgba(148, 163, 184, 0.28);
+      border-radius: 14px;
+      padding: 14px 12px;
+      text-align: center;
+      background: rgba(26, 35, 52, 0.55);
+      transition: border-color 0.15s, background 0.15s;
+      margin-bottom: 10px;
+    }
+
+    .dropzone.dragover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .dropzone p {
+      margin: 0 0 8px;
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .dropzone-actions {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .dropzone-actions button {
+      padding: 7px 12px;
+      font-size: 12.5px;
+      border-radius: 9px;
+    }
+
+    .search-box {
+      margin-bottom: 10px;
+    }
+
+    .search-box input[type="search"] {
+      padding: 9px 12px;
+      font-size: 13px;
+    }
+
+    .channel-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 320px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 240px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .channel-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: var(--surface-2);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .channel-item:hover {
+      border-color: rgba(59, 130, 246, 0.45);
+      background: #202c42;
+    }
+
+    .channel-item.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .channel-info {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .channel-name {
+      font-size: 13.5px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .channel-url {
+      font-size: 11.5px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 2px;
+    }
+
+    .history-time {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .empty-note {
+      text-align: center;
+      padding: 20px 12px;
+      font-size: 12.5px;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-badge">TV</div>
+        <div>
+          <h1>StreamDeck Player</h1>
+          <p>โยนไฟล์ Playlist (.m3u / .m3u8) หรือวางลิงก์สตรีมเพื่อเลือกช่องเล่นได้ทันที</p>
+        </div>
+      </div>
+
+      <div id="liveBadge" class="live-pill">
+        <span class="dot"></span>
+        <span id="liveText">พร้อมใช้งาน</span>
+      </div>
+    </div>
+
+    <div class="layout">
+      <main class="card">
+        <div class="url-bar">
+          <div class="input-wrap">
+            <input id="iptvInput" type="text" placeholder="เลือกช่องจาก Playlist ด้านขวา หรือวางลิงก์สตรีมที่นี่" />
+          </div>
+          <select id="modeSelect" title="โหมดสตรีม">
+            <option value="auto">อัตโนมัติ</option>
+            <option value="ts">MPEG-TS (.ts)</option>
+            <option value="hls">HLS (.m3u8)</option>
+            <option value="xtream_hls">Xtream -> /live/...m3u8</option>
+          </select>
+          <button id="playIptvBtn" type="button">เล่นสตรีม</button>
+          <button id="reloadIptvBtn" class="ghost" type="button" title="ล้างบัฟเฟอร์และโหลดใหม่">รีโหลด</button>
+        </div>
+
+        <div class="stage" id="stage">
+          <video id="video" controls playsinline></video>
+        </div>
+
+        <div class="action-row">
+          <div class="toggles">
+            <label>
+              <input id="preBufferDelay" type="checkbox" checked />
+              หน่วงเริ่มเล่น ~3 วิเพื่อสะสมบัฟเฟอร์ (4 MB)
+            </label>
+            <label>
+              <input id="autoRecover" type="checkbox" checked />
+              รีโหลดอัตโนมัติเมื่อค้างเกิน 5 วิ
+            </label>
+          </div>
+
+          <div class="quick-tools">
+            <button id="pipBtn" class="ghost" type="button">หน้าต่างลอย (PiP)</button>
+            <button id="fsBtn" class="ghost" type="button">เต็มจอ</button>
+          </div>
+        </div>
+
+        <div id="status" class="status-box">พร้อมใช้งาน — ลากไฟล์ Playlist (.m3u / .m3u8) มาวางที่กล่องด้านขวาเพื่อเลือกช่องครับ</div>
+      </main>
+
+      <div class="side-stack">
+        <aside class="card">
+          <div class="side-title">
+            <h2>Playlist ช่อง</h2>
+            <span id="channelCount">0 ช่อง</span>
+          </div>
+
+          <div id="dropzone" class="dropzone">
+            <p>ลากไฟล์ Playlist มาวางที่นี่<br/>รองรับ .m3u, .m3u8, .txt</p>
+            <div class="dropzone-actions">
+              <button id="chooseFileBtn" class="ghost" type="button">เลือกไฟล์</button>
+              <button id="clearPlaylistBtn" class="ghost" type="button">ล้างรายการ</button>
+            </div>
+            <input id="fileInput" type="file" accept=".m3u,.m3u8,.txt,text/plain,application/vnd.apple.mpegurl" hidden />
+          </div>
+
+          <div class="search-box">
+            <input id="searchInput" type="search" placeholder="ค้นหาชื่อช่องใน Playlist..." />
+          </div>
+
+          <div id="channelList" class="channel-list"></div>
+        </aside>
+
+        <aside class="card">
+          <div class="side-title">
+            <h2>ประวัติการเล่น</h2>
+            <div class="side-title-right">
+              <span id="historyCount">0 รายการ</span>
+              <button id="clearHistoryBtn" class="ghost mini" type="button">ล้าง</button>
+            </div>
+          </div>
+
+          <div id="historyList" class="history-list"></div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest/dist/mpegts.min.js"></script>
+  <script>
+    const HISTORY_STORAGE_KEY = 'streamdeck_watch_history_v1';
+    const MAX_HISTORY_ITEMS = 30;
+
+    const video = document.getElementById('video');
+    const stage = document.getElementById('stage');
+    const iptvInput = document.getElementById('iptvInput');
+    const modeSelect = document.getElementById('modeSelect');
+    const playIptvBtn = document.getElementById('playIptvBtn');
+    const reloadIptvBtn = document.getElementById('reloadIptvBtn');
+    const pipBtn = document.getElementById('pipBtn');
+    const fsBtn = document.getElementById('fsBtn');
+    const preBufferDelayCheckbox = document.getElementById('preBufferDelay');
+    const autoRecoverCheckbox = document.getElementById('autoRecover');
+    const statusEl = document.getElementById('status');
+    const liveBadge = document.getElementById('liveBadge');
+    const liveText = document.getElementById('liveText');
+
+    const dropzone = document.getElementById('dropzone');
+    const chooseFileBtn = document.getElementById('chooseFileBtn');
+    const clearPlaylistBtn = document.getElementById('clearPlaylistBtn');
+    const fileInput = document.getElementById('fileInput');
+    const searchInput = document.getElementById('searchInput');
+    const channelListEl = document.getElementById('channelList');
+    const channelCountEl = document.getElementById('channelCount');
+
+    const historyListEl = document.getElementById('historyList');
+    const historyCountEl = document.getElementById('historyCount');
+    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+
+    let hls = null;
+    let mpegtsPlayer = null;
+    let currentIptvUrl = '';
+    let stallTimer = null;
+    let startDelayTimer = null;
+    let playlistItems = [];
+    let watchHistory = loadHistory();
+
+    function loadHistory() {
+      try {
+        const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function saveHistory() {
+      try {
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(watchHistory));
+      } catch (e) {}
+    }
+
+    function formatTimeNow() {
+      return new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function recordHistory(url, label) {
+      const cleanUrl = String(url || '').trim();
+      if (!cleanUrl) return;
+      const name = (label && String(label).trim()) || cleanUrl;
+      const time = formatTimeNow();
+
+      watchHistory = watchHistory.filter((item) => item.url !== cleanUrl);
+      watchHistory.unshift({ name, url: cleanUrl, time });
+      if (watchHistory.length > MAX_HISTORY_ITEMS) {
+        watchHistory = watchHistory.slice(0, MAX_HISTORY_ITEMS);
+      }
+      saveHistory();
+      renderHistory();
+    }
+
+    function renderHistory() {
+      historyCountEl.textContent = `${watchHistory.length} รายการ`;
+
+      if (watchHistory.length === 0) {
+        historyListEl.innerHTML = '<div class="empty-note">ยังไม่มีประวัติการเล่นสตรีม</div>';
+        return;
+      }
+
+      historyListEl.innerHTML = '';
+
+      watchHistory.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'channel-item' + (item.url === currentIptvUrl ? ' active' : '');
+        row.addEventListener('click', () => {
+          iptvInput.value = item.url;
+          startIptvPlay(item.url, item.name);
+        });
+
+        const info = document.createElement('div');
+        info.className = 'channel-info';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'channel-name';
+        nameEl.textContent = item.name;
+
+        const urlEl = document.createElement('div');
+        urlEl.className = 'channel-url';
+        urlEl.textContent = item.url;
+
+        info.appendChild(nameEl);
+        info.appendChild(urlEl);
+
+        const timeEl = document.createElement('span');
+        timeEl.className = 'history-time';
+        timeEl.textContent = item.time;
+
+        row.appendChild(info);
+        row.appendChild(timeEl);
+        historyListEl.appendChild(row);
+      });
+    }
+
+    clearHistoryBtn.addEventListener('click', () => {
+      watchHistory = [];
+      saveHistory();
+      renderHistory();
+      setStatus('ล้างประวัติการเล่นแล้ว');
+    });
+
+    function setLiveState(playing, label) {
+      liveBadge.classList.toggle('playing', playing);
+      liveText.textContent = label;
+    }
+
+    function setStatus(msg) {
+      console.log('[StreamDeck]', msg);
+      statusEl.textContent = msg;
+    }
+
+    function clearTimers() {
+      if (stallTimer) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
+      if (startDelayTimer) {
+        clearTimeout(startDelayTimer);
+        startDelayTimer = null;
+      }
+    }
+
+    function armStallTimer() {
+      if (stallTimer) clearTimeout(stallTimer);
+      if (!autoRecoverCheckbox.checked || !currentIptvUrl) return;
+
+      stallTimer = setTimeout(() => {
+        if (!video.paused && currentIptvUrl) {
+          setStatus('สตรีมค้างเกิน 5 วินาที กำลังรีโหลดใหม่อัตโนมัติ...');
+          startIptvPlay(currentIptvUrl);
+        }
+      }, 5000);
+    }
+
+    video.addEventListener('waiting', () => {
+      setLiveState(false, 'กำลังบัฟเฟอร์...');
+      armStallTimer();
+    });
+
+    video.addEventListener('stalled', () => {
+      armStallTimer();
+    });
+
+    video.addEventListener('playing', () => {
+      if (stallTimer) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
+      setLiveState(true, 'กำลังเล่นสตรีม');
+    });
+
+    video.addEventListener('pause', () => {
+      if (!video.ended) {
+        setLiveState(false, 'หยุดชั่วคราว');
+      }
+    });
+
+    function destroyAllMedia() {
+      clearTimers();
+      setLiveState(false, 'พร้อมใช้งาน');
+
+      try {
+        if (hls) {
+          hls.destroy();
+          hls = null;
+        }
+      } catch (e) {}
+
+      try {
+        if (mpegtsPlayer) {
+          mpegtsPlayer.pause();
+          mpegtsPlayer.unload();
+          mpegtsPlayer.detachMediaElement();
+          mpegtsPlayer.destroy();
+          mpegtsPlayer = null;
+        }
+      } catch (e) {}
+
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
+
+    function toXtreamHlsUrl(url) {
+      try {
+        const u = new URL(url);
+        const parts = u.pathname.split('/').filter(Boolean);
+        if (parts.length === 3 && !parts[2].includes('.')) {
+          u.pathname = `/live/${parts[0]}/${parts[1]}/${parts[2]}.m3u8`;
+          return u.toString();
+        }
+      } catch (e) {}
+      return url;
+    }
+
+    function isXtreamDirect(url) {
+      try {
+        const parts = new URL(url).pathname.split('/').filter(Boolean);
+        return parts.length === 3 && !parts[2].includes('.');
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function triggerPlayWithOptionalDelay(playFn, label) {
+      const delayMs = preBufferDelayCheckbox.checked ? 3000 : 0;
+      if (delayMs > 0) {
+        setLiveState(false, 'สะสมบัฟเฟอร์ ~3 วิ...');
+        setStatus(`กำลังสะสมบัฟเฟอร์ ~3 วินาทีก่อนเริ่มเล่น (${label})...`);
+        startDelayTimer = setTimeout(playFn, delayMs);
+      } else {
+        playFn();
+      }
+    }
+
+    function playMpegTs(url, onFail) {
+      if (!window.mpegts || !mpegts.getFeatureList().mseLivePlayback) {
+        const msg = 'เบราว์เซอร์ไม่รองรับ mpegts.js (MSE Live Playback)';
+        if (onFail) onFail(msg);
+        else setStatus(msg);
+        return;
+      }
+
+      try {
+        setStatus(`กำลังโหลด MPEG-TS (บัฟเฟอร์ 4 MB): ${url}`);
+        mpegtsPlayer = mpegts.createPlayer(
+          {
+            type: 'mpegts',
+            isLive: true,
+            url: url
+          },
+          {
+            enableWorker: true,
+            enableStashBuffer: true,
+            stashInitialSize: 4096,
+            liveBufferLatencyChasing: false,
+            autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 90
+          }
+        );
+
+        mpegtsPlayer.attachMediaElement(video);
+        mpegtsPlayer.load();
+
+        triggerPlayWithOptionalDelay(() => {
+          const playPromise = mpegtsPlayer.play();
+          if (playPromise && typeof playPromise.then === 'function') {
+            playPromise
+              .then(() => setStatus(`กำลังเล่น MPEG-TS: ${url}`))
+              .catch((err) => setStatus(`รอเริ่มเล่นหรือกดปุ่ม Play บนวิดีโอ: ${err.message || err}`));
+          }
+        }, 'MPEG-TS');
+
+        mpegtsPlayer.on(mpegts.Events.ERROR, (errType, errDetail) => {
+          const detail = `MPEG-TS Error (${errType} / ${errDetail})`;
+          if (onFail) onFail(detail);
+          else setStatus(detail);
+        });
+      } catch (err) {
+        const msg = `สร้าง MPEG-TS Player ล้มเหลว: ${err.message || err}`;
+        if (onFail) onFail(msg);
+        else setStatus(msg);
+      }
+    }
+
+    function playHls(url, onFail) {
+      setStatus(`กำลังโหลด HLS: ${url}`);
+      if (Hls.isSupported()) {
+        hls = new Hls({
+          maxBufferLength: 45,
+          maxMaxBufferLength: 90,
+          liveSyncDurationCount: 6
+        });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          triggerPlayWithOptionalDelay(() => {
+            video.play()
+              .then(() => setStatus(`กำลังเล่น HLS: ${url}`))
+              .catch(() => {});
+          }, 'HLS');
+        });
+
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            const detail = `HLS Error (${data.type} / ${data.details})`;
+            if (onFail) onFail(detail);
+            else setStatus(detail);
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = url;
+        triggerPlayWithOptionalDelay(() => {
+          video.play()
+            .then(() => setStatus(`กำลังเล่น HLS: ${url}`))
+            .catch((err) => {
+              if (onFail) onFail(err.message || 'เล่น HLS ไม่สำเร็จ');
+              else setStatus('เล่น HLS ไม่สำเร็จ');
+            });
+        }, 'HLS');
+      } else {
+        const msg = 'เบราว์เซอร์นี้ไม่รองรับ HLS';
+        if (onFail) onFail(msg);
+        else setStatus(msg);
+      }
+    }
+
+    function startIptvPlay(overrideUrl, channelLabel) {
+      let url = (overrideUrl ?? iptvInput.value).trim();
+      if (!url) {
+        setStatus('กรุณาเลือกช่องหรือใส่ลิงก์สตรีมก่อนครับ');
+        return;
+      }
+      if (!/^https?:\/\//i.test(url)) {
+        url = 'http://' + url;
+      }
+
+      destroyAllMedia();
+      iptvInput.value = url;
+      currentIptvUrl = url;
+      recordHistory(url, channelLabel);
+      renderPlaylist();
+
+      const prefix = channelLabel ? `[${channelLabel}] ` : '';
+      const mode = modeSelect.value;
+
+      if (mode === 'ts') {
+        playMpegTs(url);
+      } else if (mode === 'hls') {
+        playHls(url);
+      } else if (mode === 'xtream_hls') {
+        playHls(toXtreamHlsUrl(url));
+      } else {
+        if (isXtreamDirect(url)) {
+          playMpegTs(url, (tsErr) => {
+            destroyAllMedia();
+            playHls(toXtreamHlsUrl(url), (hlsErr) => {
+              setStatus(`${prefix}เล่นไม่สำเร็จทั้งสองโหมด:\n- ${tsErr}\n- ${hlsErr}`);
+            });
+          });
+        } else {
+          playHls(url, (hlsErr) => {
+            destroyAllMedia();
+            playMpegTs(url, (tsErr) => {
+              setStatus(`${prefix}เล่นไม่สำเร็จทั้งสองโหมด:\n- ${hlsErr}\n- ${tsErr}`);
+            });
+          });
+        }
+      }
+    }
+
+    // แยกข้อมูลไฟล์ M3U / M3U8 (#EXTINF:-1,ชื่อช่อง ตามด้วยลิงก์)
+    function parseM3uContent(content) {
+      const lines = content
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      const parsed = [];
+      let pendingName = '';
+
+      for (const line of lines) {
+        if (line.startsWith('#EXTM3U')) {
+          continue;
+        }
+        if (line.startsWith('#EXTINF:')) {
+          const commaIdx = line.indexOf(',');
+          if (commaIdx !== -1) {
+            pendingName = line.slice(commaIdx + 1).trim();
+          } else {
+            pendingName = '';
+          }
+          continue;
+        }
+        if (line.startsWith('#')) {
+          continue;
+        }
+
+        const name = pendingName || `ช่องที่ ${parsed.length + 1}`;
+        parsed.push({ name, url: line });
+        pendingName = '';
+      }
+
+      return parsed;
+    }
+
+    function renderPlaylist() {
+      const keyword = searchInput.value.trim().toLowerCase();
+      const filtered = playlistItems.filter((item) => {
+        if (!keyword) return true;
+        return item.name.toLowerCase().includes(keyword) || item.url.toLowerCase().includes(keyword);
+      });
+
+      channelCountEl.textContent = `${filtered.length} / ${playlistItems.length} ช่อง`;
+
+      if (playlistItems.length === 0) {
+        channelListEl.innerHTML = '<div class="empty-note">ยังไม่ได้โหลดไฟล์ Playlist<br/>ลากไฟล์ .m3u / .m3u8 มาวางด้านบน หรือกด "เลือกไฟล์"</div>';
+        return;
+      }
+
+      if (filtered.length === 0) {
+        channelListEl.innerHTML = '<div class="empty-note">ไม่พบช่องที่ตรงกับคำค้นหา</div>';
+        return;
+      }
+
+      channelListEl.innerHTML = '';
+
+      filtered.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'channel-item' + (item.url === currentIptvUrl ? ' active' : '');
+        row.addEventListener('click', () => {
+          iptvInput.value = item.url;
+          startIptvPlay(item.url, item.name);
+        });
+
+        const info = document.createElement('div');
+        info.className = 'channel-info';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'channel-name';
+        nameEl.textContent = item.name;
+
+        const urlEl = document.createElement('div');
+        urlEl.className = 'channel-url';
+        urlEl.textContent = item.url;
+
+        info.appendChild(nameEl);
+        info.appendChild(urlEl);
+        row.appendChild(info);
+        channelListEl.appendChild(row);
+      });
+    }
+
+    function handlePlaylistFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const text = String(e.target?.result || '');
+        const items = parseM3uContent(text);
+        if (items.length === 0) {
+          setStatus(`ไม่พบรายการช่องในไฟล์ "${file.name}" ครับ`);
+          return;
+        }
+        playlistItems = items;
+        searchInput.value = '';
+        renderPlaylist();
+        setStatus(`โหลดไฟล์ "${file.name}" สำเร็จ พบ ${items.length} ช่อง — คลิกเลือกช่องในรายการเพื่อเล่นได้เลย`);
+      };
+      reader.onerror = () => {
+        setStatus(`อ่านไฟล์ "${file.name}" ไม่สำเร็จครับ`);
+      };
+      reader.readAsText(file);
+    }
+
+    chooseFileBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+      const f = e.target.files?.[0];
+      if (f) handlePlaylistFile(f);
+      fileInput.value = '';
+    });
+
+    clearPlaylistBtn.addEventListener('click', () => {
+      playlistItems = [];
+      searchInput.value = '';
+      renderPlaylist();
+      setStatus('ล้างรายการ Playlist แล้ว');
+    });
+
+    searchInput.addEventListener('input', renderPlaylist);
+
+    ['dragenter', 'dragover'].forEach((evName) => {
+      dropzone.addEventListener(evName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.add('dragover');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach((evName) => {
+      dropzone.addEventListener(evName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.remove('dragover');
+      });
+    });
+
+    dropzone.addEventListener('drop', (e) => {
+      const f = e.dataTransfer?.files?.[0];
+      if (f) handlePlaylistFile(f);
+    });
+
+    playIptvBtn.addEventListener('click', () => startIptvPlay());
+    reloadIptvBtn.addEventListener('click', () => {
+      if (currentIptvUrl) startIptvPlay(currentIptvUrl);
+    });
+    iptvInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') startIptvPlay();
+    });
+
+    pipBtn.addEventListener('click', async () => {
+      try {
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+        } else if (document.pictureInPictureEnabled && video.readyState >= 1) {
+          await video.requestPictureInPicture();
+        } else {
+          setStatus('ยังไม่สามารถเปิดหน้าต่างลอยได้ในตอนนี้ (ต้องเริ่มโหลดสตรีมก่อน)');
+        }
+      } catch (err) {
+        setStatus(`เปิดหน้าต่างลอยไม่สำเร็จ: ${err.message || err}`);
+      }
+    });
+
+    fsBtn.addEventListener('click', async () => {
+      try {
+        if (!document.fullscreenElement) {
+          await stage.requestFullscreen();
+        } else {
+          await document.exitFullscreen();
+        }
+      } catch (err) {
+        setStatus(`สลับเต็มจอไม่สำเร็จ: ${err.message || err}`);
+      }
+    });
+
+    renderPlaylist();
+    renderHistory();
+  </script>
+</body>
+</html>
